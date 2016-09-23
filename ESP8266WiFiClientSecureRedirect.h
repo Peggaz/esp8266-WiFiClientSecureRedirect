@@ -1,9 +1,3 @@
-/*  HTTPS with follow-redirect
-    Initial version by Sujay S. Phadke, 2016
-	Reduce memory foot print, add stronger type checking by Coert Vonk, 2016
-	All rights reserved.
-*/
-
 #pragma once
 #include <WiFiClientSecure.h>
 
