@@ -12,7 +12,7 @@
  */
 
 #include <ESP8266WiFi.h>
-#include <ESP8266WiFiClientSecureRedirect.h>
+#include <WiFiClientSecureRedirect.h>
 
 // replace with your network credentials
 char const * const ssid = "replace with your WiFi network name";   // ** UPDATE ME **
