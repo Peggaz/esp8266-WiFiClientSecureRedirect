@@ -11,7 +11,7 @@
  * All text above must be included in any redistribution
  */
 
-#include <ESP8266WiFiClientSecureRedirect.h>
+#include <WiFiClientSecureRedirect.h>
 
 //#define DEBUG
 #ifdef DEBUG
