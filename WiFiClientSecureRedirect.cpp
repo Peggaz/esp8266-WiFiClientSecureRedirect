@@ -1,5 +1,5 @@
 /*
- * Enables redirected HTTPS network connection using the ESP8266 built-in WiFi.
+ * Asynchronous redirected HTTPS network connection to e.g. Google Apps
  *
  * Platform: ESP8266 using Arduino IDE
  * Documentation: http://www.coertvonk.com/technology/embedded/esp8266-clock-import-events-from-google-calendar-15809
@@ -13,7 +13,7 @@
 
 #include <WiFiClientSecureRedirect.h>
 
-//#define DEBUG
+#define DEBUG
 #ifdef DEBUG
   #define DPRINT(...)    Serial.print(__VA_ARGS__)
   #define DPRINTLN(...)  Serial.println(__VA_ARGS__)
@@ -22,131 +22,241 @@
   #define DPRINTLN(...)   //now defines a blank line
 #endif
 
-WiFiClientSecureRedirect::WiFiClientSecureRedirect(void) {}  // automatically calls base constructor
-WiFiClientSecureRedirect::~WiFiClientSecureRedirect(void) {}  // automatically calls base deconstructor
 
-int
-WiFiClientSecureRedirect::connect(char const * const host,
-	                              uint16_t const port)
+WiFiClientSecureRedirect::WiFiClientSecureRedirect() {}
+WiFiClientSecureRedirect::~WiFiClientSecureRedirect() {}
+
+int  // always returns 1
+WiFiClientSecureRedirect::connect(char const * const host_,
+	                              uint16_t const port_)
 {
-	if (WiFiClientSecure::connected()) {
-		return 1;
-	}
-	uint8_t tries = 5;
-	do {
-		DPRINT(".");
-		if (WiFiClientSecure::connect(host, port)) {
-			return 1;
-		}
-		delay(1000);
-		tries--;
-	} while (tries);
-	return 0;
+	dstHost = host_;
+	dstPort = port_;
+	beginWait = millis();
+	state = HOST_WAIT4CONNECTION;
+	return 1;
 }
 
-bool 
-WiFiClientSecureRedirect::parseHeader(char * const host,
-									  size_t const hostSize,
-									  char * const path,
-									  size_t const pathSize,
-	                                  uint16_t * const port) 
+uint8_t  // return 1 if connected
+WiFiClientSecureRedirect::connected()
 {
-	if (find("302 Moved Temporarily\r\n") && find("\nLocation: ") && find("://")) {
+	return state == HOST_CONNECTED || state == REDIR_CONNECTED;
+}
 
-		size_t const hostLen = readBytesUntil('/', host, hostSize - 1);
+uint8_t const
+_parseHeader(Stream * const stream,
+			 char * const host,
+			 size_t const hostSize,
+			 char * const path,
+			 size_t const pathSize,
+			 uint16_t * const port)
+{
+	if (stream->find("302 Moved Temporarily\r\n") &&
+		stream->find("\nLocation: ") &&
+		stream->find("://")) {
+
+		size_t const hostLen = stream->readBytesUntil('/', host, hostSize - 1);
 		if (!hostLen) {
-			return false;
+			DPRINT("<1>");
+			return 1;
 		}
 		host[hostLen] = '\0';
 
-		size_t const pathLen = readBytesUntil('\n', path + 1, pathSize - 2);
+		size_t const pathLen = stream->readBytesUntil('\n', path + 1, pathSize - 2);
 		if (!pathLen) {
-			return false;
+			DPRINT("<2>");
+			return 2;
 		}
 		path[0] = '/';
 		path[pathLen] = '\0';
 		*port = 443;  // https
-		return true;
+		return 0;
 	}
-	return false;
+	DPRINT("<3>");
+	return 3;  // if you encounter this, make sure the URL is correct
 }
 
-void 
-WiFiClientSecureRedirect::writeRequest(char const * const path,
-	                                   char const * const host)
+uint8_t const
+_writeRequest(Stream * const stream,
+			  char const * const path,
+			  char const * const host)
 {
-	uint8_t HEAD[] = "GET ";  // 4 characters
-	uint8_t MIDL[] = " HTTP/1.1\r\n"
-		              "Host: ";  // 17 characters
-	uint8_t TAIL[] = "\r\n"  // 45 characters
-		             "User-Agent: ESP8266\r\n"
-		             "Connection: close\r\n"
-		             "\r\n";
+	uint8_t const HEAD[] = "GET "; 
+	uint8_t const MIDL[] = " HTTP/1.1\r\n"
+		                   "Host: ";
+	uint8_t const TAIL[] = "\r\n"
+		                   "User-Agent: ESP8266\r\n"
+		                   "Connection: close\r\n"
+		                   "\r\n";
 	uint8_t const * const uPath = reinterpret_cast<uint8_t const * const>(path);
 	uint8_t const * const uHost = reinterpret_cast<uint8_t const * const>(host);
 
-	write(HEAD, sizeof(HEAD) - 1); write(uPath, strlen(path));
-	write(MIDL, sizeof(MIDL) - 1); write(uHost, strlen(host));
-	write(TAIL, sizeof(TAIL) - 1);
-	flush();
+	// write bits at the time, so we don't need another big buffer in user space
+	stream->write(HEAD, sizeof(HEAD) - 1); stream->write(uPath, strlen(path));
+	stream->write(MIDL, sizeof(MIDL) - 1); stream->write(uHost, strlen(host));
+	stream->write(TAIL, sizeof(TAIL) - 1);
+	stream->flush();
+	return 0;
 }
 
-bool 
-WiFiClientSecureRedirect::request(char const * const dstPath,
-	                              char const * const dstHost,
-	                              uint32_t const timeout_ms,
-								  char const * const dstFingerprint,
-								  char const * const redirFingerprint)
+uint8_t const  // returns 0 on success
+WiFiClientSecureRedirect::sendHostRequest()
 {
-	setTimeout(timeout_ms);
-	DPRINT("Host reply ");
-	if (!connected()) {
-		DPRINTLN(" !con");
-		return false;
+	if (!WiFiClientSecure::connected()) {
+		return 2;
 	}
+
 	if (dstFingerprint && !verify(dstFingerprint, dstHost)) {
-		DPRINTLN(" !fp");
-		return false;
+		return 3;
 	}
-	writeRequest(dstPath, dstHost);
+	return _writeRequest(this, dstPath, dstHost);
+}
 
-	char redirHost[30];
-	char redirPath[300];
-	uint16_t redirPort;
-
-	if (!parseHeader(redirHost, sizeof(redirHost), redirPath, sizeof(redirPath), &redirPort)) {
-		DPRINTLN("!parse");
-		return false;
-	}
-
-	while (connected() && available()) {
-		(void)read();  // not sure if we need to empty the Rx buffer before closing the socket
-	}
-	stop();
-
-	DPRINT(" done\nRedir connect ");
-
-	if (!connect(redirHost, redirPort)) {
-		DPRINTLN(" !connect");
-		return false;
-	}
+uint8_t const  // returns 0 on success
+WiFiClientSecureRedirect::receiveHostReply()
+{
+	// we take a leap of faith .. and assume that *all* data will arrive within timeout_ms
+	// from the initial data.  Would be better to only start processing if we either have all
+	// the data, or we are able to process chunks at the time
 	setTimeout(timeout_ms);
-	if(redirFingerprint && !verify(redirFingerprint, redirHost)) {
-		DPRINTLN(" !fp");
-		return false;
+	if (_parseHeader(this, redirHost, sizeof(redirHost), redirPath, sizeof(redirPath), &redirPort)) {
+		return 1;
 	}
-  
-	writeRequest(redirPath, redirHost);
 
-	DPRINT(" done\nRedir reply ..");
-	// skip header
-	while (connected()) {
+	while (WiFiClientSecure::connected() && available()) {
+		(void)read();  // maybe we need to empty the Rx buffer before closing the socket
+	}
+	WiFiClientSecure::stop();
+	return 0;
+}
+
+uint8_t const  // returns 0 on success
+WiFiClientSecureRedirect::sendRedirRequest()
+{
+	if (!WiFiClientSecure::connected()) {
+		return 2;
+	}
+	if (redirFingerprint && !verify(redirFingerprint, redirHost)) {
+		return 3;
+	}
+
+	return _writeRequest(this, redirPath, redirHost);
+}
+
+uint8_t const // always returns 0
+WiFiClientSecureRedirect::receiveRedirHeader()
+{
+	// skips the header
+	setTimeout(timeout_ms);
+	while (WiFiClientSecure::connected()) {
 		String line = readStringUntil('\n');
 		if (line == "\r") {
 			break;
 		}
 	}
-	DPRINTLN(" done");
-	// connection remains open, caller should read all data and call stop() method
-    return true;
+	return 0;  // connection remains open, caller should read data and call stop() method
+}
+
+uint8_t const // returns 0 on success
+WiFiClientSecureRedirect::request(char const * const dstPath_,// must be static alloc'ed
+	                              char const * const dstHost_, // must be static alloc'ed
+	                              uint32_t const timeout_ms_,
+	                              char const * const dstFingerprint_, // must be static alloc'ed
+	                              char const * const redirFingerprint_)  // must be static alloc'ed
+{
+	dstPath = dstPath_;
+	dstHost = dstHost_;
+	timeout_ms = timeout_ms_;
+	dstFingerprint = dstFingerprint_;
+	redirFingerprint = redirFingerprint_;
+
+	state = HOST_WAIT4REPLY;
+	return sendHostRequest();
+}
+
+int  // returns 1 if the redir host responded
+WiFiClientSecureRedirect::response()
+{
+	return state == AVAILABLE;
+}
+
+int  // returns 1 if the redir host responded and sent data
+WiFiClientSecureRedirect::available()
+{
+	return state == AVAILABLE && WiFiClientSecure::available();
+}
+
+void
+WiFiClientSecureRedirect::stop()
+{
+	WiFiClientSecure::stop();
+	state = IDLE;
+}
+
+void
+WiFiClientSecureRedirect::tick()
+{
+	state_t prevState;
+	do {
+		prevState = state;
+
+		uint32_t const timeout = eventTimeouts[state];
+		if (timeout && millis() - beginWait >= timeout) {
+			DPRINT(__func__); DPRINT(": timeout in state "); DPRINTLN(state);
+			Serial.flush();
+			stop();
+		}
+
+		bool error = false;
+		switch (state) {
+			case IDLE:
+				break;
+			case HOST_WAIT4CONNECTION:
+				if (WiFiClientSecure::connect(dstHost, dstPort)) {
+					state = HOST_CONNECTED;
+				}
+				break;
+			case HOST_CONNECTED:
+				break;  // wait for client to call request() method
+
+			case HOST_WAIT4REPLY:
+				if (WiFiClientSecure::available()) {
+					if (!(error = receiveHostReply())) {
+						state = REDIR_WAIT4CONNECTION;
+					}
+				}
+				break;
+			case REDIR_WAIT4CONNECTION:
+				if (WiFiClientSecure::connect(redirHost, redirPort)) {
+					state = REDIR_CONNECTED;
+				}
+				break;
+			case REDIR_CONNECTED:
+				if (!(error = sendRedirRequest())) {
+					state = REDIR_WAIT4REPLY;
+				}
+				break;
+			case REDIR_WAIT4REPLY:
+				if (WiFiClientSecure::available()) {
+					if (!(error = receiveRedirHeader())) {
+						state = AVAILABLE;
+					}
+				}
+				break;
+			case AVAILABLE:
+				break;  // wait for client to read data and call stop() method
+
+			case COUNT:
+				break;  // pseudo value
+		}
+		if (error) {
+			DPRINT(__func__); DPRINT(": error in state "); DPRINTLN(state);
+			stop();
+		}
+		if (state != prevState) {
+			beginWait = millis();
+		}
+		//DPRINT(__func__); DPRINT(prevState); DPRINT(">"); DPRINTLN(state);
+
+	} while (state != prevState && eventTimeouts[state]);
 }
