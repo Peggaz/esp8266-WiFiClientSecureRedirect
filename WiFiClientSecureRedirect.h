@@ -56,14 +56,14 @@ class WiFiClientSecureRedirect : public WiFiClientSecure {
 		COUNT // terminator
 	} state_t;
 	uint32_t eventTimeouts[COUNT] = {
-		0,    // IDLE
-		1000, // HOST_WAIT4CONNECTION
-		0,    // HOST_CONNECTED
-		4000, // HOST_WAIT4REPLY
-		1000, // REDIR_WAIT4CONNECTION
-		100,  // REDIR_CONNECTED
-		4000, // REDIR_WAIT4REPLY
-		0,    // AVAILABLE
+		0,     // IDLE (0)
+		1000,  // HOST_WAIT4CONNECTION (1)
+		0,     // HOST_CONNECTED (2)
+		10000, // HOST_WAIT4REPLY (3)
+		1000,  // REDIR_WAIT4CONNECTION (4)
+		100,   // REDIR_CONNECTED (5)
+		10000, // REDIR_WAIT4REPLY (6)
+		0,     // AVAILABLE
 	};
 	state_t state = IDLE;
 	uint8_t const sendHostRequest();

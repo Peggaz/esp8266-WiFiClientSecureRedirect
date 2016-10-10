@@ -13,15 +13,17 @@
 
 #include <WiFiClientSecureRedirect.h>
 
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
   #define DPRINT(...)    Serial.print(__VA_ARGS__)
   #define DPRINTLN(...)  Serial.println(__VA_ARGS__)
 #else
-  #define DPRINT(...)     //now defines a blank line
-  #define DPRINTLN(...)   //now defines a blank line
+  #define DPRINT(...)
+  #define DPRINTLN(...)
 #endif
-
+#ifndef CHECK_FINGERPRINT
+#define CHECK_FINGERPRINT (0)
+#endif
 
 WiFiClientSecureRedirect::WiFiClientSecureRedirect() {}
 WiFiClientSecureRedirect::~WiFiClientSecureRedirect() {}
@@ -106,9 +108,11 @@ WiFiClientSecureRedirect::sendHostRequest()
 		return 2;
 	}
 
+#if CHECK_FINGERPRINT
 	if (dstFingerprint && !verify(dstFingerprint, dstHost)) {
 		return 3;
 	}
+#endif
 	return _writeRequest(this, dstPath, dstHost);
 }
 
@@ -136,10 +140,11 @@ WiFiClientSecureRedirect::sendRedirRequest()
 	if (!WiFiClientSecure::connected()) {
 		return 2;
 	}
+#if CHECK_FINGERPRINT
 	if (redirFingerprint && !verify(redirFingerprint, redirHost)) {
 		return 3;
 	}
-
+#endif
 	return _writeRequest(this, redirPath, redirHost);
 }
 
@@ -202,7 +207,7 @@ WiFiClientSecureRedirect::tick()
 
 		uint32_t const timeout = eventTimeouts[state];
 		if (timeout && millis() - beginWait >= timeout) {
-			DPRINT(__func__); DPRINT(": timeout in state "); DPRINTLN(state);
+			DPRINT("WiFiClientSecureRedirect::"); DPRINT(__func__); DPRINT("() timeout in state "); DPRINTLN(state);
 			Serial.flush();
 			stop();
 		}
