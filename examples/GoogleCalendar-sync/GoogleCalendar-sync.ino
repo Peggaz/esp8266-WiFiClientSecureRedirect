@@ -54,6 +54,7 @@ void loop() {
 	DPRINT("Free heap .. "); DPRINTLN(ESP.getFreeHeap());
 	bool error = true;
 	WiFiClientSecureRedirect client;
+	client.setInsecure();
 
 	DPRINT("Alarm sync ");
 	do {
@@ -63,6 +64,7 @@ void loop() {
 		}
 		DPRINT(".");
 		while (!client.connected()) {  // wait until connected
+			delay(100);
 			client.tick();
 		}
 		DPRINT(".");
@@ -71,6 +73,7 @@ void loop() {
 		}
 		DPRINT(".");
 		while (!client.response()) {  // wait until host responded
+			delay(100);
 			client.tick();
 		}
 		DPRINT(".\n<RESPONSE>\n");
